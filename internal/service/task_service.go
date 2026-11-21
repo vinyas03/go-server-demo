@@ -7,6 +7,8 @@ import (
 
 	"go-learn/internal/model"
 	"go-learn/internal/repository"
+
+	"go.elastic.co/apm/v2"
 )
 
 // TaskService defines the business operations for tasks.
@@ -30,36 +32,24 @@ func NewTaskService(repo repository.TaskRepository) TaskService {
 }
 
 func (s *taskService) CreateTask(ctx context.Context, input model.CreateTaskInput) (*model.Task, error) {
-	// 1. Context Cancellation / Timeout check - these checks ensure that if the context has been canceled or has timed out, we stop processing and return an error immediately.
-	//when can context be canceled or timeout? Context can be canceled or timeout in scenarios such as:
-	// 1. Client Disconnect: If the client disconnects before the request is completed, the context will be canceled.
-	// 2. Request Timeout: If a timeout is set for the request and it exceeds that duration, the context will be canceled.
-	// 3. Manual Cancellation: If some part of the application explicitly cancels the context (e.g., due to an error or a specific condition), it will be canceled.
+	// Start a new APM span for tracing the CreateTask operation
+	//here we are starting a new APM span for the CreateTask operation. This allows us to trace the execution of this method and capture performance metrics, errors, and other relevant information.
+	//  The span is associated with the current context, which may contain request-scoped metadata such as user ID, tenant ID, and other headers.
+	span, ctx := apm.StartSpan(ctx, "TaskService.CreateTask", "app.service")
+	//this defer statement ensures that the span is ended when the function returns, regardless of whether it returns normally or due to an error. This is important for proper resource management and accurate tracing.
+	defer span.End()
 
-	//context deadline uses:
-	//say for example, we have a long-running operation that takes a significant amount of time to complete. If we set a context deadline for this operation,
-	// it allows us to specify a maximum duration for the operation to complete.
-	// If the operation exceeds this duration, the context will be canceled, and we can handle the cancellation gracefully (e.g., by returning an error or cleaning up resources).
-
-	//context cancellation uses:
-	//context cancellation is useful in scenarios where we want to stop processing a request or operation based on certain conditions.
-	// For example, if a user cancels a request in a web application, we can cancel the context associated with that request,
-	// which will propagate the cancellation to all goroutines and operations that are using that context.
-	//how this is detected by the server ? it is detected by the server through the context's Done channel. When the context is canceled or times out, the Done channel is closed,
-	//  and any goroutines that are waiting on that channel will be notified of the cancellation.
-	//imagine a scenario where a user initiates a long-running operation, such as generating a report. If the user decides to cancel the operation before it completes,
-	//then the http connection will be closed, and the server will detect this closure through the context's Done channel. The server can then stop processing the operation and return
-	//an appropriate response to the user.
-
+	// 1. Context Cancellation / Timeout check
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
 	// 2. Business Check on Headers / Context Values
-	// Example: Inspect client role or permission passed via context
 	role := model.GetHeader(ctx, "X-Role")
 	if strings.EqualFold(role, "read-only") {
-		return nil, fmt.Errorf("%w: read-only users cannot create tasks", model.ErrForbidden)
+		err := fmt.Errorf("%w: read-only users cannot create tasks", model.ErrForbidden)
+		apm.CaptureError(ctx, err).Send()
+		return nil, err
 	}
 
 	// 3. Input validation
@@ -82,6 +72,7 @@ func (s *taskService) CreateTask(ctx context.Context, input model.CreateTaskInpu
 	}
 
 	if err := s.repo.Create(ctx, task); err != nil {
+		apm.CaptureError(ctx, err).Send()
 		return nil, err
 	}
 
@@ -89,6 +80,9 @@ func (s *taskService) CreateTask(ctx context.Context, input model.CreateTaskInpu
 }
 
 func (s *taskService) GetTask(ctx context.Context, id int64) (*model.Task, error) {
+	span, ctx := apm.StartSpan(ctx, "TaskService.GetTask", "app.service")
+	defer span.End()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -97,10 +91,17 @@ func (s *taskService) GetTask(ctx context.Context, id int64) (*model.Task, error
 		return nil, fmt.Errorf("%w: invalid task id", model.ErrInvalidInput)
 	}
 
-	return s.repo.GetByID(ctx, id)
+	task, err := s.repo.GetByID(ctx, id)
+	if err != nil && err != model.ErrNotFound {
+		apm.CaptureError(ctx, err).Send()
+	}
+	return task, err
 }
 
 func (s *taskService) ListTasks(ctx context.Context) ([]*model.Task, error) {
+	span, ctx := apm.StartSpan(ctx, "TaskService.ListTasks", "app.service")
+	defer span.End()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -109,6 +110,9 @@ func (s *taskService) ListTasks(ctx context.Context) ([]*model.Task, error) {
 }
 
 func (s *taskService) UpdateTask(ctx context.Context, id int64, input model.UpdateTaskInput) (*model.Task, error) {
+	span, ctx := apm.StartSpan(ctx, "TaskService.UpdateTask", "app.service")
+	defer span.End()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -116,7 +120,9 @@ func (s *taskService) UpdateTask(ctx context.Context, id int64, input model.Upda
 	// Business Check: verify role permissions from context
 	role := model.GetHeader(ctx, "X-Role")
 	if strings.EqualFold(role, "read-only") {
-		return nil, fmt.Errorf("%w: read-only users cannot modify tasks", model.ErrForbidden)
+		err := fmt.Errorf("%w: read-only users cannot modify tasks", model.ErrForbidden)
+		apm.CaptureError(ctx, err).Send()
+		return nil, err
 	}
 
 	if id <= 0 {
@@ -150,6 +156,7 @@ func (s *taskService) UpdateTask(ctx context.Context, id int64, input model.Upda
 	}
 
 	if err := s.repo.Update(ctx, task); err != nil {
+		apm.CaptureError(ctx, err).Send()
 		return nil, err
 	}
 
@@ -157,6 +164,9 @@ func (s *taskService) UpdateTask(ctx context.Context, id int64, input model.Upda
 }
 
 func (s *taskService) DeleteTask(ctx context.Context, id int64) error {
+	span, ctx := apm.StartSpan(ctx, "TaskService.DeleteTask", "app.service")
+	defer span.End()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -164,7 +174,9 @@ func (s *taskService) DeleteTask(ctx context.Context, id int64) error {
 	// Business Check: verify role permissions from context
 	role := model.GetHeader(ctx, "X-Role")
 	if strings.EqualFold(role, "read-only") {
-		return fmt.Errorf("%w: read-only users cannot delete tasks", model.ErrForbidden)
+		err := fmt.Errorf("%w: read-only users cannot delete tasks", model.ErrForbidden)
+		apm.CaptureError(ctx, err).Send()
+		return err
 	}
 
 	if id <= 0 {

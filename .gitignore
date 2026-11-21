@@ -1,0 +1,43 @@
+# Compiled binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Architecture / OS specific binaries
+*.test
+*.out
+
+# Go workspace and dependency lock files
+go.work
+go.sum
+
+# Go test and coverage artifacts
+*.coverprofile
+coverage.txt
+coverage.out
+profile.out
+
+# Environment variables & local secrets
+.env
+.env.*
+!.env.example
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*~
+
+# Operating System specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# APM / Logging local dumps
+*.log

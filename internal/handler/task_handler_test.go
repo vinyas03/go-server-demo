@@ -12,6 +12,8 @@ import (
 	"go-learn/internal/model"
 	"go-learn/internal/repository"
 	"go-learn/internal/service"
+
+	"go.elastic.co/apm/module/apmhttp/v2"
 )
 
 func setupTestServer() http.Handler {
@@ -22,8 +24,14 @@ func setupTestServer() http.Handler {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// Wrap with RequestContextMiddleware to inject request headers into context
-	return middleware.RequestContextMiddleware(mux)
+	// Wrap with RequestContextMiddleware and CubeAPM tracer
+	wrapped := middleware.Chain(
+		mux,
+		middleware.Recovery,
+		middleware.RequestContextMiddleware,
+	)
+
+	return apmhttp.Wrap(wrapped)
 }
 
 func TestTaskHandler_CreateWithHeaders(t *testing.T) {

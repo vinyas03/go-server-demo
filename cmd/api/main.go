@@ -15,10 +15,20 @@ import (
 	"go-learn/internal/middleware"
 	"go-learn/internal/repository"
 	"go-learn/internal/service"
+
+	"go.elastic.co/apm/module/apmhttp/v2"
+	"go.elastic.co/apm/v2"
 )
 
 func main() {
-	// 1. Configuration
+	// 1. CubeAPM Configuration Defaults (can be overridden via environment variables)
+	if os.Getenv("ELASTIC_APM_SERVICE_NAME") == "" {
+		os.Setenv("ELASTIC_APM_SERVICE_NAME", "go-learn-api")
+	}
+	if os.Getenv("ELASTIC_APM_SERVER_URL") == "" {
+		os.Setenv("ELASTIC_APM_SERVER_URL", "http://localhost:3130")
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -73,10 +83,15 @@ func main() {
 		middleware.CORS,
 	)
 
-	// 5. HTTP Server Configuration with safe timeouts
+	// 5. Wrap with CubeAPM HTTP Tracer
+	// apmhttp.Wrap instruments all inbound HTTP requests into CubeAPM transactions,
+	// tracks status codes, latency, path, and propagates distributed trace contexts.
+	tracedHandler := apmhttp.Wrap(wrappedHandler)
+
+	// 6. HTTP Server Configuration with safe timeouts
 	srv := &http.Server{
 		Addr:         serverAddr,
-		Handler:      wrappedHandler,
+		Handler:      tracedHandler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -96,6 +111,10 @@ func main() {
 
 	go func() {
 		log.Printf("Server starting on http://localhost%s", serverAddr)
+		log.Printf("CubeAPM Tracing enabled -> Service: %s, Collector: %s",
+			os.Getenv("ELASTIC_APM_SERVICE_NAME"),
+			os.Getenv("ELASTIC_APM_SERVER_URL"),
+		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Server failed to start: %v", err)
 		}
@@ -105,6 +124,14 @@ func main() {
 	// This line blocks the main goroutine until a signal is received on the shutdownChan channel.
 	sig := <-shutdownChan
 	log.Printf("Received signal %s. Shutting down gracefully...", sig)
+
+	// Flush any pending traces to CubeAPM collector
+	//this will ensure that any pending traces are sent to the CubeAPM collector before the application exits, preventing loss of tracing data.
+	//pending traces are traces that have been recorded but not yet sent to the CubeAPM collector. If the application exits before these traces are sent,
+	// they will be lost and will not be available for analysis in the CubeAPM dashboard.
+	//this scenario can occur if the application is terminated abruptly (e.g., due to a crash or a forced shutdown) or if the application is shut down gracefully but there are still pending traces that have not been sent to the collector.
+	// for example, if the application is processing a long-running request and is terminated before the request completes, any traces associated with that request may be lost if they have not yet been sent to the collector.
+	apm.DefaultTracer().Flush(nil)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
