@@ -13,9 +13,17 @@ import (
 func TestCreateTask(t *testing.T) {
 	repo := repository.NewMemoryTaskRepository()
 	svc := service.NewTaskService(repo)
-	ctx := context.Background()
 
-	t.Run("successful creation", func(t *testing.T) {
+	t.Run("successful creation with context headers and metadata", func(t *testing.T) {
+		// Provide context with simulated request metadata (user ID, tenant ID, headers)
+		ctx := model.WithRequestContext(context.Background(), model.RequestContext{
+			UserID:   "usr_999",
+			TenantID: "tenant_acme",
+			Headers: map[string]string{
+				"X-Role": "admin",
+			},
+		})
+
 		input := model.CreateTaskInput{
 			Title:       "Test task",
 			Description: "Test description",
@@ -32,8 +40,29 @@ func TestCreateTask(t *testing.T) {
 		if task.Title != "Test task" {
 			t.Errorf("expected title 'Test task', got '%s'", task.Title)
 		}
-		if task.Completed {
-			t.Errorf("expected task to be incomplete by default")
+		if task.CreatedBy != "usr_999" {
+			t.Errorf("expected CreatedBy 'usr_999', got '%s'", task.CreatedBy)
+		}
+		if task.TenantID != "tenant_acme" {
+			t.Errorf("expected TenantID 'tenant_acme', got '%s'", task.TenantID)
+		}
+	})
+
+	t.Run("business check rejects read-only role from context", func(t *testing.T) {
+		ctx := model.WithRequestContext(context.Background(), model.RequestContext{
+			Headers: map[string]string{
+				"X-Role": "read-only",
+			},
+		})
+
+		_, err := svc.CreateTask(ctx, model.CreateTaskInput{
+			Title: "Forbidden Task",
+		})
+		if err == nil {
+			t.Fatalf("expected error for read-only role, got nil")
+		}
+		if !errors.Is(err, model.ErrForbidden) {
+			t.Errorf("expected ErrForbidden, got %v", err)
 		}
 	})
 
@@ -42,7 +71,7 @@ func TestCreateTask(t *testing.T) {
 			Title: "   ",
 		}
 
-		_, err := svc.CreateTask(ctx, input)
+		_, err := svc.CreateTask(context.Background(), input)
 		if err == nil {
 			t.Fatalf("expected error for empty title, got nil")
 		}

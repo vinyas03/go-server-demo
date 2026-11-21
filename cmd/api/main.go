@@ -44,8 +44,6 @@ func main() {
 	repo := repository.NewMemoryTaskRepository()
 
 	// Business Logic Layer (Service)
-	//this line will create a new instance of the TaskService, passing in the repository as a dependency.
-	// The TaskService will use this repository to perform CRUD operations on tasks.
 	taskService := service.NewTaskService(repo)
 
 	// Presentation / Controller Layer (Handler)
@@ -65,10 +63,12 @@ func main() {
 	// Register domain routes
 	taskHandler.RegisterRoutes(mux)
 
-	// 4. Wrap with Middleware (Recovery -> Logging -> CORS)
+	// 4. Wrap with Middleware
+	// Order: Recovery -> RequestContext -> Logger -> CORS
 	wrappedHandler := middleware.Chain(
 		mux,
 		middleware.Recovery,
+		middleware.RequestContextMiddleware,
 		middleware.Logger,
 		middleware.CORS,
 	)
@@ -82,7 +82,15 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 6. Graceful Shutdown Setup
+	// 6. Graceful Shutdown Setup - this line sets up a channel to listen for OS signals (like SIGINT or SIGTERM) to gracefully shut down the server when the application is terminated.
+	//without this line, the server would not be able to handle shutdown signals properly, which could lead to abrupt termination of the server and potential loss of in-flight requests or data.
+	//example of both scenarios:
+	// 1. With Graceful Shutdown:
+	// When the server receives a shutdown signal, it stops accepting new requests and waits for existing requests to complete before shutting down.
+	// This ensures that all in-flight requests are processed and no data is lost.
+	// 2. Without Graceful Shutdown:
+	// When the server receives a shutdown signal, it immediately terminates all in-flight requests and shuts down.
+	// This can lead to loss of data and incomplete processing of requests.
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
 
@@ -94,6 +102,7 @@ func main() {
 	}()
 
 	// Block until signal is received
+	// This line blocks the main goroutine until a signal is received on the shutdownChan channel.
 	sig := <-shutdownChan
 	log.Printf("Received signal %s. Shutting down gracefully...", sig)
 

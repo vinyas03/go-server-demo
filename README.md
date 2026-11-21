@@ -19,36 +19,37 @@ go-learn/
 │   │   ├── task_handler_test.go # Controller tests via httptest
 │   │   └── response.go          # Standardized JSON response & error utilities
 │   ├── service/                 # Business Logic Layer (Domain Services)
-│   │   ├── task_service.go      # Core business rules, validation, orchestrations
+│   │   ├── task_service.go      # Business rules, context checks, validation
 │   │   └── task_service_test.go # Business logic unit tests (independent of HTTP)
 │   ├── repository/              # Persistence / Data Access Layer
 │   │   ├── repository.go        # Storage interface (swappable with SQL, Mongo, etc.)
 │   │   └── memory.go            # Thread-safe in-memory store (sync.RWMutex)
-│   ├── model/                   # Domain Models & Entities
+│   ├── model/                   # Domain Models & Context Abstraction
+│   │   ├── context.go           # RequestContext, header accessors, context keys
 │   │   ├── task.go              # Task struct, DTOs (CreateTaskInput, UpdateTaskInput)
-│   │   └── errors.go            # Domain error sentinels (ErrNotFound, ErrInvalidInput)
+│   │   └── errors.go            # Domain error sentinels (ErrNotFound, ErrForbidden, etc.)
 │   └── middleware/              # Cross-cutting HTTP middlewares
-│       └── middleware.go        # Request logging, panic recovery, and CORS
+│       └── middleware.go        # RequestContext, logging, recovery, CORS
 ├── go.mod
 └── README.md
 ```
 
-### Layer Responsibilities & Data Flow
+### Context & Request Header Flow
 
 ```
-[ HTTP Request ]
+[ HTTP Request ] (e.g. X-User-ID: usr_123, X-Role: admin)
        │
        ▼
-[ Middleware Chain ] ───────── (Logging, Panic Recovery, CORS)
+[ RequestContextMiddleware ] ── Extracts HTTP headers into model.RequestContext & embeds into r.Context()
        │
        ▼
-[ Controller / Handler ] ───── Parses HTTP parameters/body, maps errors to HTTP codes
-       │ (Calls Service)
+[ Controller / Handler ] ────── Passes r.Context() directly to Service: svc.CreateTask(r.Context(), input)
+       │
        ▼
-[ Business Logic / Service ] ─ Validates business rules (No net/http dependencies)
-       │ (Calls Repository)
-       ▼
-[ Data Access / Repository ] ─ Persists & retrieves data (Interface-driven)
+[ Business Service ] ────────── Inspects context:
+                                - model.GetUserID(ctx)
+                                - model.GetHeader(ctx, "X-Role")
+                                - ctx.Err() (cancellation/timeout checks)
 ```
 
 ---
@@ -60,7 +61,7 @@ go-learn/
 ```bash
 go run ./cmd/api
 ```
-The server will start on port `8080` (or the port specified by the `PORT` environment variable):
+The server will start on port `8080`:
 ```
 Server starting on http://localhost:8080
 ```
@@ -68,91 +69,55 @@ Server starting on http://localhost:8080
 ### 2. Run the Unit & Handler Tests
 
 ```bash
-go test -v ./...
+go test -v ./internal/...
 ```
 
 ---
 
 ## 📡 API Endpoints
 
-### Health Check
-- **`GET /health`**
-  ```bash
-  curl http://localhost:8080/health
-  ```
-  **Response:**
-  ```json
-  {
-    "status": "healthy",
-    "time": "2026-11-22T00:50:00Z"
-  }
-  ```
-
----
-
 ### Task Management (`/api/v1/tasks`)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/v1/tasks` | Create a new task |
+| `POST` | `/api/v1/tasks` | Create a new task (attaches user & tenant from headers) |
 | `GET` | `/api/v1/tasks` | List all tasks |
 | `GET` | `/api/v1/tasks/{id}` | Get a task by ID |
 | `PUT` | `/api/v1/tasks/{id}` | Update a task by ID |
 | `DELETE` | `/api/v1/tasks/{id}` | Delete a task by ID |
 
-#### 1. Create a Task
+#### 1. Create a Task (with Request Headers)
 ```bash
 curl -X POST http://localhost:8080/api/v1/tasks \
   -H "Content-Type: application/json" \
-  -d '{"title": "Learn Go Clean Architecture", "description": "Build layered net/http API"}'
+  -H "X-User-ID: alice-123" \
+  -H "X-Tenant-ID: acme-corp" \
+  -d '{"title": "Learn Go Clean Architecture", "description": "Pass context to business logic"}'
 ```
 **Response (`201 Created`):**
 ```json
 {
   "id": 1,
   "title": "Learn Go Clean Architecture",
-  "description": "Build layered net/http API",
+  "description": "Pass context to business logic",
   "completed": false,
-  "created_at": "2026-11-22T00:50:00Z",
-  "updated_at": "2026-11-22T00:50:00Z"
+  "created_by": "alice-123",
+  "tenant_id": "acme-corp",
+  "created_at": "2026-11-22T01:35:00Z",
+  "updated_at": "2026-11-22T01:35:00Z"
 }
 ```
 
-#### 2. List Tasks
+#### 2. Business Check on Headers (`X-Role: read-only`)
 ```bash
-curl http://localhost:8080/api/v1/tasks
-```
-
-#### 3. Get Task by ID
-```bash
-curl http://localhost:8080/api/v1/tasks/1
-```
-
-#### 4. Update a Task
-```bash
-curl -X PUT http://localhost:8080/api/v1/tasks/1 \
+curl -X POST http://localhost:8080/api/v1/tasks \
   -H "Content-Type: application/json" \
-  -d '{"completed": true}'
+  -H "X-Role: read-only" \
+  -d '{"title": "Forbidden task"}'
 ```
-
-#### 5. Delete a Task
-```bash
-curl -X DELETE http://localhost:8080/api/v1/tasks/1
+**Response (`403 Forbidden`):**
+```json
+{
+  "error": "forbidden: insufficient permissions: read-only users cannot create tasks"
+}
 ```
-**Response (`204 No Content`)**
-
----
-
-## 🛡️ Key Architectural Highlights
-
-1. **Standard Library Only (`net/http`)**:
-   Uses Go 1.22+ enhanced ServeMux routing (`POST /api/v1/tasks`, `GET /api/v1/tasks/{id}` with `r.PathValue("id")`). No heavy third-party framework dependencies needed.
-2. **Separation of Concerns**:
-   - `handler` knows nothing about database/storage.
-   - `service` knows nothing about HTTP (`net/http`), JSON, or status codes.
-   - `repository` is an interface, making switching from in-memory to PostgreSQL or MongoDB seamless.
-3. **Robust Production Readiness**:
-   - Panic recovery middleware prevents server crashes on runtime panics.
-   - Structured logging middleware tracks request latency and HTTP status.
-   - Server timeouts (`ReadTimeout`, `WriteTimeout`, `IdleTimeout`) defend against Slowloris attacks.
-   - Graceful shutdown handles `SIGINT`/`SIGTERM` allowing ongoing requests to complete.

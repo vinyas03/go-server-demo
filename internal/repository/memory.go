@@ -24,6 +24,8 @@ func NewMemoryTaskRepository() *MemoryTaskRepository {
 }
 
 func (r *MemoryTaskRepository) Create(ctx context.Context, task *model.Task) error {
+	// Lock is used to ensure that the operation is thread-safe, preventing race conditions when multiple goroutines access the repository concurrently.
+	//for example, if two goroutines try to create a task at the same time, they could end up with the same ID or overwrite each other's data without proper locking.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
